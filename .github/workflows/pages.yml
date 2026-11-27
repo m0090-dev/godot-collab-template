@@ -1,0 +1,95 @@
+# Godot Web 書き出し → GitHub Pages 公開（ブランチ別公開つき）
+#
+# 動作:
+#   - main への push       → 書き出してサイトのルート "/" に公開
+#   - 作業ブランチへの push → 書き出して "/<ブランチ名>/" に公開
+#   - 公開先は gh-pages ブランチ（Pages の公開ソースを
+#     「Deploy from a branch: gh-pages / root」に設定すること）
+#
+# 仕組み:
+#   - 公開は peaceiris/actions-gh-pages で gh-pages ブランチへ書き込む。
+#     keep_files: true なので、main の公開でブランチ用フォルダは消えず、
+#     ブランチの公開でルートや他ブランチのフォルダも消えない。
+#   - ブランチを削除したときの掃除は cleanup-preview.yml が担当する。
+#
+# 注意:
+#   - ブランチ名は英小文字とハイフンのみ（URL のフォルダ名になるため）。
+#   - Godot 本体と成果物は必ずリポジトリの外（$RUNNER_TEMP）に置く。
+#   - 公開キュー（concurrency）は全ブランチ共通で「実行1本＋待ち1本」。
+#     短時間に複数ブランチへ push すると、真ん中の実行が押し出されて
+#     キャンセルされることがある（実測）。ブランチは1本ずつ push し、
+#     公開が終わってから次を push すること。
+#   - Web 書き出しは GDScript 前提（C# プロジェクトは Web に書き出せない）。
+#     variant/thread_support=false（= 4.3 以降の既定）なので、
+#     GitHub Pages のような COOP/COEP ヘッダを付けられない置き場でも動く。
+
+name: build-and-deploy-web
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GODOT_VERSION: "4.7.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Godot 本体と書き出しテンプレートを取得（リポジトリの外に置く）
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -L -o godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -o godot.zip
+          mv "Godot_v${GODOT_VERSION}-stable_linux.x86_64" godot
+          chmod +x godot
+          curl -L -o templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          mkdir -p "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          unzip -o templates.tpz -d templates-unpacked
+          cp -r templates-unpacked/templates/* "$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable/"
+          "$RUNNER_TEMP/godot" --version
+
+      - name: 読み込みチェック（インポートでスクリプトの壊れを検出）
+        run: |
+          "$RUNNER_TEMP/godot" --headless --path "$GITHUB_WORKSPACE" --import
+
+      - name: Web 書き出し
+        env:
+          OUT_DIR: ${{ runner.temp }}/webout
+        run: |
+          mkdir -p "$OUT_DIR"
+          "$RUNNER_TEMP/godot" --headless --path "$GITHUB_WORKSPACE" --export-release "Web" "$OUT_DIR/index.html"
+          test -f "$OUT_DIR/index.html"
+          ls -lh "$OUT_DIR"
+          # 合計が 300MB を超えたら異常（何かを巻き込んでいる）ので止める
+          test "$(du -sb "$OUT_DIR" | cut -f1)" -lt 314572800
+
+      - name: 公開（main → ルート）
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ${{ runner.temp }}/webout
+          keep_files: true
+          commit_message: "deploy main: ${{ github.sha }}"
+
+      - name: 公開（作業ブランチ → /<ブランチ名>/）
+        if: github.ref != 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ${{ runner.temp }}/webout
+          destination_dir: ${{ github.ref_name }}
+          keep_files: true
+          commit_message: "deploy ${{ github.ref_name }}: ${{ github.sha }}"
