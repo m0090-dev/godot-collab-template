@@ -15,10 +15,11 @@
 # 注意:
 #   - ブランチ名は英小文字とハイフンのみ（URL のフォルダ名になるため）。
 #   - Godot 本体と成果物は必ずリポジトリの外（$RUNNER_TEMP）に置く。
-#   - 公開キュー（concurrency）は全ブランチ共通で「実行1本＋待ち1本」。
-#     短時間に複数ブランチへ push すると、真ん中の実行が押し出されて
-#     キャンセルされることがある（実測）。ブランチは1本ずつ push し、
-#     公開が終わってから次を push すること。
+#   - 公開キュー（concurrency）はブランチごとに分かれている
+#     （group: pages-publish-<ブランチ>）。短時間に複数ブランチへ
+#     push しても、真ん中の実行が押し出されてキャンセルされることはない。
+#     ただし gh-pages は1本の共有ブランチなので、2つのデプロイが
+#     全く同時に終わると片方が失敗することがある（再実行で直る）。
 #   - Web 書き出しは GDScript 前提（C# プロジェクトは Web に書き出せない）。
 #     variant/thread_support=false（= 4.3 以降の既定）なので、
 #     GitHub Pages のような COOP/COEP ヘッダを付けられない置き場でも動く。
@@ -34,7 +35,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: pages-publish
+  group: pages-publish-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
